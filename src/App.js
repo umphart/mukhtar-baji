@@ -10,6 +10,7 @@ import Customers from './pages/Customers';
 import Transactions from './pages/Transactions';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+import AuthCallback from './pages/AuthCallback';
 
 function App() {
   return (
@@ -42,7 +43,7 @@ function App() {
                 </MainLayout>
               </ProtectedRoute>
             } />
-            
+            <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/reports" element={
               <ProtectedRoute>
                 <MainLayout>

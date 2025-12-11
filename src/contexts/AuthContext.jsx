@@ -5,6 +5,16 @@ const AuthContext = createContext({});
 
 export const useAuth = () => useContext(AuthContext);
 
+// Helper function to get the current site URL
+const getSiteUrl = () => {
+  // For production, use the current hostname
+  if (process.env.NODE_ENV === 'production') {
+    return window.location.origin; // This gives you the current domain
+  }
+  // For development
+  return process.env.REACT_APP_SITE_URL || 'http://localhost:3000';
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +67,7 @@ export const AuthProvider = ({ children }) => {
         password,
         options: {
           data: userData,
+          emailRedirectTo: `${getSiteUrl()}/auth/callback`,
         },
       });
       
