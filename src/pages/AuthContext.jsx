@@ -5,6 +5,16 @@ const AuthContext = createContext({});
 
 export const useAuth = () => useContext(AuthContext);
 
+// Helper function to get the current site URL
+const getSiteUrl = () => {
+  // For production, use the current hostname
+  if (process.env.NODE_ENV === 'production') {
+    return window.location.origin; // This gives you the current domain
+  }
+  // For development
+  return process.env.REACT_APP_SITE_URL || 'http://localhost:3000';
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -40,7 +50,6 @@ export const AuthProvider = ({ children }) => {
       
       if (error) throw error;
       
-      // Set user and session immediately
       setUser(data.user);
       setSession(data.session);
       
@@ -51,36 +60,92 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const signUp = async (email, password, userData) => {
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          data: userData,
-        },
-      });
-      
-      if (error) throw error;
-      
-      // If session is returned (auto-confirmed), set user immediately
-      if (data.session) {
-        setUser(data.user);
-        setSession(data.session);
-      }
-      
-      return data;
-    } catch (error) {
-      console.error('Sign up error:', error);
-      throw error;
+ const signUp = async (email, password, userData) => {
+  try {
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: {
+        data: userData,
+        // This is for magic links, but still good to have
+        emailRedirectTo: `${getSiteUrl()}/auth/confirm`,
+      },
+    });
+    
+    if (error) throw error;
+    
+    // Note: data.session might be null if email confirmation is required
+    // So we don't automatically sign in the user
+    if (data.session) {
+      setUser(data.user);
+      setSession(data.session);
     }
-  };
+    
+    // Return a success message regardless of session
+    return { 
+      ...data, 
+      message: 'Please check your email to confirm your account.',
+      requiresConfirmation: !data.session
+    };
+  } catch (error) {
+    console.error('Sign up error:', error);
+    throw error;
+  }
+};
 
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
     setUser(null);
     setSession(null);
+  };
+
+  // NEW: Change password function
+  const changePassword = async (currentPassword, newPassword) => {
+    try {
+      // First, reauthenticate the user
+      const { data: userData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: currentPassword,
+      });
+
+      if (signInError) {
+        throw new Error('Current password is incorrect');
+      }
+
+      // Update password
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (updateError) throw updateError;
+
+      return { success: true, message: 'Password updated successfully' };
+    } catch (error) {
+      console.error('Change password error:', error);
+      throw error;
+    }
+  };
+
+  // NEW: Update profile function
+  const updateProfile = async (updates) => {
+    try {
+      const { data, error } = await supabase.auth.updateUser({
+        data: updates
+      });
+
+      if (error) throw error;
+      
+      // Update local user state
+      if (data.user) {
+        setUser(data.user);
+      }
+      
+      return { success: true, message: 'Profile updated successfully' };
+    } catch (error) {
+      console.error('Update profile error:', error);
+      throw error;
+    }
   };
 
   const value = {
@@ -90,6 +155,8 @@ export const AuthProvider = ({ children }) => {
     signIn,
     signUp,
     signOut,
+    changePassword, // NEW
+    updateProfile,  // NEW
   };
 
   return (

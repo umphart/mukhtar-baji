@@ -8,6 +8,7 @@ import {
   FunnelIcon,
   PlusCircleIcon,
   MinusCircleIcon,
+  ArrowUturnLeftIcon
 } from '@heroicons/react/24/outline';
 
 const Transactions = () => {
@@ -59,6 +60,8 @@ const Transactions = () => {
         return 'Money Out (Customer Deposit)';
       case 'withdrawal':
         return 'Money Out (Withdrawal)';
+      case 'refund':
+        return 'Money In (Refund)';
       default:
         return type;
     }
@@ -67,6 +70,7 @@ const Transactions = () => {
   const getTypeColor = (type) => {
     switch (type) {
       case 'topup':
+      case 'refund':
         return 'bg-green-100 text-green-800';
       case 'customer_deposit':
       case 'withdrawal':
@@ -80,6 +84,8 @@ const Transactions = () => {
     switch (type) {
       case 'topup':
         return <ArrowUpIcon className="h-5 w-5 text-green-500" />;
+      case 'refund':
+        return <ArrowUturnLeftIcon className="h-5 w-5 text-green-500" />;
       case 'customer_deposit':
       case 'withdrawal':
         return <ArrowDownIcon className="h-5 w-5 text-red-500" />;
@@ -91,6 +97,7 @@ const Transactions = () => {
   const getAmountColor = (type) => {
     switch (type) {
       case 'topup':
+      case 'refund':
         return 'text-green-600';
       case 'customer_deposit':
       case 'withdrawal':
@@ -103,6 +110,7 @@ const Transactions = () => {
   const getAmountSign = (type) => {
     switch (type) {
       case 'topup':
+      case 'refund':
         return '+';
       case 'customer_deposit':
       case 'withdrawal':
@@ -112,10 +120,10 @@ const Transactions = () => {
     }
   };
 
-  // Calculate totals
+  // Calculate totals including refunds
   const calculateTotals = () => {
     const moneyIn = transactions
-      .filter(tx => tx.type === 'topup')
+      .filter(tx => tx.type === 'topup' || tx.type === 'refund')
       .reduce((sum, tx) => sum + (tx.amount || 0), 0);
     
     const moneyOut = transactions
@@ -124,11 +132,34 @@ const Transactions = () => {
     
     const netFlow = moneyIn - moneyOut;
     
+    // Breakdown by type
+    const topups = transactions
+      .filter(tx => tx.type === 'topup')
+      .reduce((sum, tx) => sum + (tx.amount || 0), 0);
+    
+    const refunds = transactions
+      .filter(tx => tx.type === 'refund')
+      .reduce((sum, tx) => sum + (tx.amount || 0), 0);
+    
+    const customerDeposits = transactions
+      .filter(tx => tx.type === 'customer_deposit')
+      .reduce((sum, tx) => sum + (tx.amount || 0), 0);
+    
+    const withdrawals = transactions
+      .filter(tx => tx.type === 'withdrawal')
+      .reduce((sum, tx) => sum + (tx.amount || 0), 0);
+    
     return {
       moneyIn,
       moneyOut,
       netFlow,
       totalTransactions: transactions.length,
+      breakdown: {
+        topups,
+        refunds,
+        customerDeposits,
+        withdrawals
+      }
     };
   };
 
@@ -143,13 +174,16 @@ const Transactions = () => {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Money In (Top-ups)</p>
               <p className="text-2xl font-bold text-green-600 mt-2">
-                {formatCurrency(totals.moneyIn)}
+                {formatCurrency(totals.breakdown.topups)}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {totals.breakdown.refunds > 0 && `+ ₦${totals.breakdown.refunds.toLocaleString()} in refunds`}
               </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
@@ -161,9 +195,29 @@ const Transactions = () => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
           <div className="flex items-center justify-between">
             <div>
+              <p className="text-sm font-medium text-gray-600">Money In (Refunds)</p>
+              <p className="text-2xl font-bold text-emerald-600 mt-2">
+                {formatCurrency(totals.breakdown.refunds)}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                From deposit adjustments
+              </p>
+            </div>
+            <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
+              <ArrowUturnLeftIcon className="h-6 w-6 text-emerald-600" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center justify-between">
+            <div>
               <p className="text-sm font-medium text-gray-600">Money Out (Deposits)</p>
               <p className="text-2xl font-bold text-red-600 mt-2">
-                {formatCurrency(totals.moneyOut)}
+                {formatCurrency(totals.breakdown.customerDeposits)}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Customer deposits
               </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center">
@@ -180,6 +234,9 @@ const Transactions = () => {
                 totals.netFlow >= 0 ? 'text-green-600' : 'text-red-600'
               }`}>
                 {totals.netFlow >= 0 ? '+' : ''}{formatCurrency(totals.netFlow)}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Total: {formatCurrency(totals.moneyIn)} in / {formatCurrency(totals.moneyOut)} out
               </p>
             </div>
             <div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center">
@@ -212,6 +269,16 @@ const Transactions = () => {
               }`}
             >
               Money In (Top-ups)
+            </button>
+            <button
+              onClick={() => setFilterType('refund')}
+              className={`px-4 py-2 rounded-lg border ${
+                filterType === 'refund'
+                  ? 'bg-emerald-100 border-emerald-500 text-emerald-700'
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              Money In (Refunds)
             </button>
             <button
               onClick={() => setFilterType('customer_deposit')}
@@ -254,6 +321,7 @@ const Transactions = () => {
               <span className="text-sm">
                 {filterType === 'all' ? 'All' : 
                  filterType === 'topup' ? 'Money In (Top-ups)' :
+                 filterType === 'refund' ? 'Money In (Refunds)' :
                  filterType === 'customer_deposit' ? 'Money Out (Customer Deposits)' :
                  filterType === 'withdrawal' ? 'Money Out (Withdrawals)' : 
                  filterType} Transactions
@@ -318,11 +386,13 @@ const Transactions = () => {
                       <div className="text-sm text-gray-900 max-w-xs truncate">
                         {transaction.type === 'topup' 
                           ? 'Wallet top-up' 
+                          : transaction.type === 'refund'
+                          ? `Refund: ${transaction.description || 'Deposit adjustment'}`
                           : transaction.type === 'customer_deposit'
                           ? `Customer deposit: ${transaction.customers?.name || 'Unknown'}`
                           : transaction.type === 'withdrawal'
                           ? 'Withdrawal from wallet'
-                          : 'No description'}
+                          : transaction.description || 'No description'}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -362,13 +432,19 @@ const Transactions = () => {
                 <div className="text-right">
                   <p className="text-sm text-gray-600">Money In (Top-ups)</p>
                   <p className="font-bold text-green-600">
-                    {formatCurrency(totals.moneyIn)}
+                    {formatCurrency(totals.breakdown.topups)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-gray-600">Money In (Refunds)</p>
+                  <p className="font-bold text-emerald-600">
+                    {formatCurrency(totals.breakdown.refunds)}
                   </p>
                 </div>
                 <div className="text-right">
                   <p className="text-sm text-gray-600">Money Out (Deposits)</p>
                   <p className="font-bold text-red-600">
-                    {formatCurrency(totals.moneyOut)}
+                    {formatCurrency(totals.breakdown.customerDeposits)}
                   </p>
                 </div>
                 <div className="text-right">

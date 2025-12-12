@@ -4,7 +4,7 @@ import { useWallet } from '../contexts/WalletContext';
 import { XMarkIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 
 const CustomerForm = ({ customer, onClose, onSuccess }) => {
-  const { walletBalance, deductFromWallet } = useWallet();
+  const { walletBalance, deductFromWallet, topUpWallet, refreshBalance } = useWallet();
   const [formData, setFormData] = useState({
     name: '',
     amount: '',
@@ -24,15 +24,29 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
     }
   }, [customer]);
 
-  // Check balance when amount changes
+  // Check balance when amount changes - only for new customers or when increasing deposit
   useEffect(() => {
     const amountNum = parseFloat(formData.amount) || 0;
-    if (amountNum > walletBalance) {
-      setInsufficientBalance(true);
+    
+    if (customer) {
+      // For editing: check if increasing deposit
+      const currentCustomerAmount = customer.amount || 0;
+      const amountIncrease = amountNum - currentCustomerAmount;
+      
+      if (amountIncrease > walletBalance) {
+        setInsufficientBalance(true);
+      } else {
+        setInsufficientBalance(false);
+      }
     } else {
-      setInsufficientBalance(false);
+      // For new customers: check total amount
+      if (amountNum > walletBalance) {
+        setInsufficientBalance(true);
+      } else {
+        setInsufficientBalance(false);
+      }
     }
-  }, [formData.amount, walletBalance]);
+  }, [formData.amount, walletBalance, customer]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -51,29 +65,128 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
         throw new Error('Amount cannot be negative');
       }
 
-      if (!customer && amountNum > walletBalance) {
-        throw new Error(`Insufficient wallet balance. Available: ₦${walletBalance.toLocaleString()}`);
-      }
-
-      console.log('Creating customer with amount:', amountNum);
+      console.log('Customer operation with amount:', amountNum);
       console.log('Current wallet balance:', walletBalance);
 
       if (customer) {
-        // Update existing customer
-        const { error } = await supabase
+        // UPDATE EXISTING CUSTOMER
+        const amountDifference = amountNum - customer.amount;
+        
+        // Check if increasing deposit beyond wallet balance
+        if (amountDifference > walletBalance) {
+          throw new Error(`Insufficient wallet balance. Available: ₦${walletBalance.toLocaleString()}, Needed: ₦${formatCurrency(amountDifference)}`);
+        }
+
+        console.log('Amount difference:', amountDifference);
+
+        // First update the customer
+        const { error: updateError } = await supabase
           .from('customers')
           .update({
             name: formData.name,
             amount: amountNum,
+            updated_at: new Date().toISOString()
           })
           .eq('id', customer.id);
 
-        if (error) throw error;
+        if (updateError) throw updateError;
         
-        setSuccessMessage(`Customer "${formData.name}" updated successfully with deposit of ₦${formatCurrency(amountNum)}`);
+        // Handle amount changes
+        if (amountDifference !== 0) {
+          if (amountDifference > 0) {
+            // Increased deposit - deduct from wallet
+            console.log('Deducting increased amount from wallet:', amountDifference);
+            try {
+              await deductFromWallet(
+                amountDifference,
+                `Increased deposit for customer: ${formData.name}`,
+                customer.id
+              );
+              console.log('Wallet deduction for increase successful');
+            } catch (deductError) {
+              console.error('Wallet deduction failed:', deductError);
+              // Revert customer update
+              await supabase
+                .from('customers')
+                .update({
+                  amount: customer.amount,
+                  name: customer.name
+                })
+                .eq('id', customer.id);
+              throw new Error(`Failed to update wallet: ${deductError.message}`);
+            }
+          } else if (amountDifference < 0) {
+            // Decreased deposit - refund to wallet
+            const refundAmount = Math.abs(amountDifference);
+            console.log('Refunding decreased amount to wallet:', refundAmount);
+            
+            try {
+              // Use topUpWallet to add money back to wallet
+              await topUpWallet(refundAmount);
+              
+              // Create refund transaction
+              await supabase
+                .from('transactions')
+                .insert([{
+                  type: 'refund',
+                  customer_id: customer.id,
+                  amount: refundAmount,
+                  description: `Refund from decreased deposit for customer: ${formData.name}`,
+                  status: 'completed'
+                }]);
+              console.log('Wallet refund successful');
+            } catch (refundError) {
+              console.error('Wallet refund failed:', refundError);
+              // Revert customer update
+              await supabase
+                .from('customers')
+                .update({
+                  amount: customer.amount,
+                  name: customer.name
+                })
+                .eq('id', customer.id);
+              throw new Error(`Failed to refund to wallet: ${refundError.message}`);
+            }
+          }
+          
+          // Log activity for amount change
+          try {
+            const actionType = amountDifference > 0 ? 'customer_deposit_increase' : 'customer_deposit_decrease';
+            const actionDesc = amountDifference > 0 ? 'increased' : 'decreased';
+            
+            await supabase.rpc('log_daily_activity', {
+              p_activity_type: actionType,
+              p_description: `Customer "${formData.name}" deposit ${actionDesc} by ₦${Math.abs(amountDifference)}`,
+              p_amount: Math.abs(amountDifference),
+              p_reference_id: customer.id
+            });
+          } catch (activityError) {
+            console.error('Failed to log activity:', activityError);
+            // Don't throw - this is a non-critical error
+          }
+        }
+        
+        // Log update activity
+        try {
+          await supabase.rpc('log_daily_activity', {
+            p_activity_type: 'customer_updated',
+            p_description: `Updated customer: ${formData.name}`,
+            p_amount: 0,
+            p_reference_id: customer.id
+          });
+        } catch (activityError) {
+          console.error('Failed to log update activity:', activityError);
+        }
+        
+        setSuccessMessage(`Customer "${formData.name}" updated successfully! ${amountDifference !== 0 ? `₦${formatCurrency(Math.abs(amountDifference))} ${amountDifference > 0 ? 'deducted from' : 'refunded to'} wallet.` : 'No changes to wallet balance.'}`);
       } else {
+        // CREATE NEW CUSTOMER
+        if (amountNum > walletBalance) {
+          throw new Error(`Insufficient wallet balance. Available: ₦${walletBalance.toLocaleString()}`);
+        }
+
         // Create new customer
-        const { data, error } = await supabase
+        const { data, error: createError } = await supabase
           .from('customers')
           .insert([{
             name: formData.name,
@@ -82,7 +195,7 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
           .select()
           .single();
 
-        if (error) throw error;
+        if (createError) throw createError;
 
         console.log('Customer created successfully:', data);
 
@@ -92,7 +205,7 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
           try {
             await deductFromWallet(
               amountNum,
-              `Customer deposit: ${formData.name}`,
+              `New customer deposit: ${formData.name}`,
               data.id
             );
             console.log('Wallet deduction successful');
@@ -111,7 +224,7 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
         try {
           await supabase.rpc('log_daily_activity', {
             p_activity_type: 'customer_added',
-            p_description: `Added customer: ${formData.name} with deposit of ₦${amountNum}`,
+            p_description: `Added new customer: ${formData.name} with deposit of ₦${amountNum}`,
             p_amount: amountNum,
             p_reference_id: data.id
           });
@@ -124,6 +237,9 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
       }
 
       console.log('Customer operation completed successfully');
+      
+      // Refresh wallet balance
+      await refreshBalance();
       
       // Show success message
       setSuccess(true);
@@ -167,6 +283,28 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
   };
 
   const amountNum = parseFloat(formData.amount) || 0;
+  
+  // Calculate the amount difference for editing
+  const amountDifference = customer ? amountNum - customer.amount : 0;
+  
+  // Calculate new wallet balance for display
+  const calculateNewWalletBalance = () => {
+    if (customer) {
+      if (amountDifference > 0) {
+        // Increased deposit
+        return walletBalance - amountDifference;
+      } else if (amountDifference < 0) {
+        // Decreased deposit
+        return walletBalance + Math.abs(amountDifference);
+      }
+      return walletBalance; // No change
+    } else {
+      // New customer
+      return walletBalance - amountNum;
+    }
+  };
+  
+  const newWalletBalance = calculateNewWalletBalance();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -216,11 +354,15 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
             </div>
           )}
 
-          {insufficientBalance && !customer && !success && (
+          {insufficientBalance && !success && (
             <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg">
               <p className="font-medium">⚠️ Insufficient Balance</p>
               <p className="text-sm mt-1">
-                You need ₦{formatCurrency(amountNum - walletBalance)} more to add this customer.
+                {customer ? (
+                  `You need ₦${formatCurrency(amountDifference - walletBalance)} more to increase this deposit.`
+                ) : (
+                  `You need ₦${formatCurrency(amountNum - walletBalance)} more to add this customer.`
+                )}
               </p>
             </div>
           )}
@@ -265,9 +407,29 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
                   />
                 </div>
                 <p className="text-xs text-gray-500 mt-1">
-                  This amount will be deducted from your wallet balance
+                  {customer ? 'Adjust deposit amount. Changes will affect wallet balance.' : 'This amount will be deducted from your wallet balance'}
                 </p>
               </div>
+
+              {/* Current deposit info for editing */}
+              {customer && (
+                <div className="p-3 bg-gray-100 rounded-lg">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Current Deposit:</span>
+                    <span className="font-medium">{formatCurrency(customer.amount)}</span>
+                  </div>
+                  {amountDifference !== 0 && (
+                    <div className={`flex justify-between text-sm mt-1 ${
+                      amountDifference > 0 ? 'text-red-600' : 'text-green-600'
+                    }`}>
+                      <span>Amount Change:</span>
+                      <span className="font-medium">
+                        {amountDifference > 0 ? '-' : '+'}{formatCurrency(Math.abs(amountDifference))}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="bg-gray-50 p-4 rounded-lg">
                 <h3 className="font-medium text-gray-700 mb-2">Summary</h3>
@@ -282,12 +444,22 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
                       {formData.amount ? formatCurrency(amountNum) : '₦0.00'}
                     </span>
                   </div>
+                  {customer && amountDifference !== 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Wallet Adjustment:</span>
+                      <span className={`font-medium ${
+                        amountDifference > 0 ? 'text-red-600' : 'text-green-600'
+                      }`}>
+                        {amountDifference > 0 ? 'Deduct' : 'Refund'} {formatCurrency(Math.abs(amountDifference))}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between pt-2 border-t border-gray-200">
                     <span className="text-gray-600">New Wallet Balance:</span>
                     <span className={`font-bold ${
-                      !customer && amountNum > 0 ? 'text-red-600' : 'text-green-600'
+                      newWalletBalance < walletBalance ? 'text-red-600' : 'text-green-600'
                     }`}>
-                      {formatCurrency(walletBalance - (customer ? 0 : amountNum))}
+                      {formatCurrency(newWalletBalance)}
                     </span>
                   </div>
                 </div>
@@ -331,6 +503,14 @@ const CustomerForm = ({ customer, onClose, onSuccess }) => {
               </div>
               <h3 className="text-lg font-semibold text-gray-900 mb-2">Operation Successful!</h3>
               <p className="text-gray-600 mb-4">{successMessage}</p>
+              <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">New Balance:</span>
+                  <span className="text-lg font-bold text-blue-900">
+                    {formatCurrency(walletBalance)}
+                  </span>
+                </div>
+              </div>
               <div className="flex justify-center">
                 <button
                   onClick={onClose}

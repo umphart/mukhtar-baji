@@ -60,31 +60,38 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const signUp = async (email, password, userData) => {
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          data: userData,
-          emailRedirectTo: `${getSiteUrl()}/auth/callback`,
-        },
-      });
-      
-      if (error) throw error;
-      
-      if (data.session) {
-        setUser(data.user);
-        setSession(data.session);
-      }
-      
-      return data;
-    } catch (error) {
-      console.error('Sign up error:', error);
-      throw error;
+const signUp = async (email, password, userData) => {
+  try {
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: {
+        data: userData,
+        // This is for magic links, but still good to have
+        emailRedirectTo: `${getSiteUrl()}/auth/confirm`,
+      },
+    });
+    
+    if (error) throw error;
+    
+    // Note: data.session might be null if email confirmation is required
+    // So we don't automatically sign in the user
+    if (data.session) {
+      setUser(data.user);
+      setSession(data.session);
     }
-  };
-
+    
+    // Return a success message regardless of session
+    return { 
+      ...data, 
+      message: 'Please check your email to confirm your account.',
+      requiresConfirmation: !data.session
+    };
+  } catch (error) {
+    console.error('Sign up error:', error);
+    throw error;
+  }
+};
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;

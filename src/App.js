@@ -11,7 +11,7 @@ import Transactions from './pages/Transactions';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import AuthCallback from './pages/AuthCallback';
-
+import EmailConfirm from './pages/EmailConfirm';
 function App() {
   return (
     <Router>
@@ -43,6 +43,7 @@ function App() {
                 </MainLayout>
               </ProtectedRoute>
             } />
+            <Route path="/auth/confirm" element={<EmailConfirm />} />
             <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="/reports" element={
               <ProtectedRoute>
